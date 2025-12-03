@@ -2,26 +2,81 @@ from flask import Flask, request, jsonify
 from datetime import datetime
 import json
 import os
+import redis
+from redis.exceptions import RedisError, ConnectionError
 
 app = Flask(__name__)
 
-# File to store signals
-SIGNALS_FILE = 'signals.json'
+# Redis configuration
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_DB = int(os.getenv('REDIS_DB', 0))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+
+# Redis key for signals list
+REDIS_SIGNALS_KEY = 'signals:list'
+MAX_SIGNALS = 1000
+
+# Initialize Redis connection
+try:
+    redis_client = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        db=REDIS_DB,
+        password=REDIS_PASSWORD,
+        decode_responses=True,  # Automatically decode responses to strings
+        socket_connect_timeout=5,
+        socket_timeout=5,
+        retry_on_timeout=True
+    )
+    # Test connection
+    redis_client.ping()
+except (ConnectionError, RedisError) as e:
+    print(f"Warning: Could not connect to Redis: {e}")
+    print("Please ensure Redis is running and accessible.")
+    redis_client = None
 
 def load_signals():
-    """Load signals from file"""
-    if not os.path.exists(SIGNALS_FILE):
+    """Load signals from Redis"""
+    if redis_client is None:
         return []
+    
     try:
-        with open(SIGNALS_FILE, 'r') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
+        # Get all signals from Redis list (they're stored as JSON strings)
+        signals_json = redis_client.lrange(REDIS_SIGNALS_KEY, 0, MAX_SIGNALS - 1)
+        
+        # Parse each JSON string back to dictionary
+        signals = []
+        for signal_json in signals_json:
+            try:
+                signals.append(json.loads(signal_json))
+            except json.JSONDecodeError:
+                # Skip corrupted entries
+                continue
+        
+        return signals
+    except (RedisError, ConnectionError) as e:
+        print(f"Error loading signals from Redis: {e}")
         return []
 
-def save_signals(signals):
-    """Save signals to file"""
-    with open(SIGNALS_FILE, 'w') as f:
-        json.dump(signals, f, indent=2)
+def save_signal(signal_data):
+    """Save a single signal to Redis"""
+    if redis_client is None:
+        raise RedisError("Redis connection not available")
+    
+    try:
+        # Convert signal to JSON string
+        signal_json = json.dumps(signal_data)
+        
+        # Add signal to the beginning of the list
+        redis_client.lpush(REDIS_SIGNALS_KEY, signal_json)
+        
+        # Trim list to keep only the last MAX_SIGNALS
+        redis_client.ltrim(REDIS_SIGNALS_KEY, 0, MAX_SIGNALS - 1)
+        
+    except (RedisError, ConnectionError) as e:
+        print(f"Error saving signal to Redis: {e}")
+        raise
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -37,17 +92,8 @@ def webhook():
         signal_data['timestamp'] = datetime.now().isoformat()
         signal_data['received_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # Load existing signals
-        signals = load_signals()
-        
-        # Add new signal at the beginning (most recent first)
-        signals.insert(0, signal_data)
-        
-        # Keep only the last 1000 signals (optional, to prevent file from growing too large)
-        signals = signals[:1000]
-        
-        # Save signals
-        save_signals(signals)
+        # Save signal to Redis
+        save_signal(signal_data)
         
         return jsonify({
             'status': 'success',
@@ -55,6 +101,11 @@ def webhook():
             'timestamp': signal_data['timestamp']
         }), 200
         
+    except (RedisError, ConnectionError) as e:
+        return jsonify({
+            'error': 'Redis storage error',
+            'message': str(e)
+        }), 503
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -83,7 +134,26 @@ def get_signals():
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
-    return jsonify({'status': 'healthy'}), 200
+    try:
+        # Check Redis connection
+        if redis_client is None:
+            return jsonify({
+                'status': 'unhealthy',
+                'message': 'Redis connection not available'
+            }), 503
+        
+        # Test Redis connection
+        redis_client.ping()
+        
+        return jsonify({
+            'status': 'healthy',
+            'redis': 'connected'
+        }), 200
+    except (RedisError, ConnectionError) as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'message': f'Redis connection error: {str(e)}'
+        }), 503
 
 if __name__ == '__main__':
     # Run the Flask app
