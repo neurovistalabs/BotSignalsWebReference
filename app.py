@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from datetime import datetime
 import threading
+import json
 
 app = Flask(__name__)
 
@@ -43,8 +44,27 @@ def save_signal(signal_data):
 def webhook():
     """Receive signal from TradingView webhook"""
     try:
-        # Get the signal data from the request
-        signal_data = request.get_json()
+        # TradingView sends JSON if the alert message is valid JSON,
+        # otherwise it sends text/plain. Handle both cases.
+        signal_data = None
+        
+        # Try to get JSON data first
+        if request.is_json:
+            signal_data = request.get_json()
+        else:
+            # If not JSON, try to parse the raw text as JSON
+            try:
+                raw_data = request.get_data(as_text=True)
+                if raw_data:
+                    signal_data = json.loads(raw_data)
+            except (json.JSONDecodeError, ValueError):
+                # If it's not JSON, treat it as plain text and create a signal object
+                raw_data = request.get_data(as_text=True)
+                if raw_data:
+                    signal_data = {
+                        'message': raw_data,
+                        'raw': True
+                    }
         
         if not signal_data:
             return jsonify({'error': 'No data received'}), 400
@@ -56,6 +76,7 @@ def webhook():
         # Save signal to in-memory storage
         save_signal(signal_data)
         
+        # Return quickly (TradingView requires response within 3 seconds)
         return jsonify({
             'status': 'success',
             'message': 'Signal received and stored',

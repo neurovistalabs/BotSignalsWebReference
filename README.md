@@ -24,6 +24,25 @@ A simple Python web service that receives trading signals from TradingView webho
 
    The service will start on `http://localhost:5000`
 
+## Deployment
+
+### Deploying to Render (or similar platforms)
+
+When deploying to Render or similar platforms:
+
+1. **HTTPS is automatically handled** - Render provides HTTPS on port 443, which TradingView requires
+2. **Use the `/webhook` endpoint** - Your webhook URL will be: `https://your-app.onrender.com/webhook`
+3. **Update your C# client** - Change the API URL to your deployed URL:
+   ```csharp
+   var client = new SignalsApiClient("https://your-app.onrender.com");
+   ```
+
+### Important for TradingView:
+- ✅ Your deployed service will automatically use HTTPS (port 443)
+- ✅ Response time is fast (in-memory storage)
+- ✅ Handles both JSON and plain text webhook messages
+- ⚠️ Make sure 2FA is enabled on your TradingView account
+
 ## API Endpoints
 
 ### 1. POST /webhook
@@ -92,12 +111,30 @@ curl http://localhost:5000/health
 
 ## TradingView Webhook Setup
 
-In your TradingView alert, use the following webhook URL:
+### Important TradingView Requirements:
+- **Ports**: Only ports **80** (HTTP) and **443** (HTTPS) are accepted by TradingView
+- **Response Time**: Your server must respond within **3 seconds** or the request will be canceled
+- **2FA Required**: Webhook alerts require 2-factor authentication on your TradingView account
+- **IPv6**: Not currently supported - use IPv4 addresses
+- **Content Types**: TradingView sends `application/json` if the message is valid JSON, otherwise `text/plain`
+
+### Webhook URL Configuration:
+
+**For Production (HTTPS on port 443):**
 ```
-http://your-server-ip:5000/webhook
+https://your-domain.com/webhook
 ```
 
-**TradingView Alert Message Example** (JSON format):
+**For Development/Testing:**
+- Use a service like ngrok to expose your local server:
+  ```bash
+  ngrok http 5000
+  # Then use: https://your-ngrok-url.ngrok.io/webhook
+  ```
+
+### TradingView Alert Message Format:
+
+**Recommended JSON Format** (TradingView will send as `application/json`):
 ```json
 {
   "action": "{{strategy.order.action}}",
@@ -107,6 +144,19 @@ http://your-server-ip:5000/webhook
   "strategy": "{{strategy.name}}"
 }
 ```
+
+**Alternative**: You can also send plain text, and the service will store it as a message:
+```
+BUY {{ticker}} at {{close}}
+```
+
+### TradingView IP Allowlist (Optional):
+
+If your server has firewall restrictions, allowlist these TradingView IP addresses:
+- `52.89.214.238`
+- `34.212.75.30`
+- `54.218.53.128`
+- `52.32.178.7`
 
 ## C# Client Example
 
