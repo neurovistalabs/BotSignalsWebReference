@@ -2,8 +2,14 @@ from flask import Flask, request, jsonify
 from datetime import datetime
 import threading
 import json
+import os
+import logging
 
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # In-memory storage for signals
 MAX_SIGNALS = 1000
@@ -67,6 +73,7 @@ def webhook():
                     }
         
         if not signal_data:
+            logger.warning("Webhook received request with no data")
             return jsonify({'error': 'No data received'}), 400
         
         # Add timestamp to the signal
@@ -75,6 +82,7 @@ def webhook():
         
         # Save signal to in-memory storage
         save_signal(signal_data)
+        logger.info(f"Signal received and stored: {signal_data.get('action', 'unknown')} {signal_data.get('symbol', 'unknown')}")
         
         # Return quickly (TradingView requires response within 3 seconds)
         return jsonify({
@@ -84,6 +92,7 @@ def webhook():
         }), 200
         
     except Exception as e:
+        logger.error(f"Error processing webhook: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/signals', methods=['GET'])
@@ -122,6 +131,9 @@ def health():
         }), 503
 
 if __name__ == '__main__':
-    # Run the Flask app
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Run the Flask app (for local development only)
+    # In production, Render uses gunicorn (see Procfile)
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    app.run(host='0.0.0.0', port=port, debug=debug)
 
