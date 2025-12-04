@@ -4,50 +4,20 @@ A simple Python web service that receives trading signals from TradingView webho
 
 ## Features
 
-- **Webhook Endpoint**: Receives POST requests from TradingView and stores signals in Redis
+- **Webhook Endpoint**: Receives POST requests from TradingView and stores signals in memory
 - **Signals Endpoint**: Returns recent signals for your trading bot
-- **Redis Storage**: Fast, scalable signal storage using Redis
-- **Health Monitoring**: Health check endpoint includes Redis connection status
+- **In-Memory Storage**: Fast, thread-safe signal storage - no external dependencies required
+- **Health Monitoring**: Health check endpoint shows storage status and signal count
+- **Deployment Ready**: Works on Render, Heroku, and other platforms without additional services
 
 ## Setup
 
-1. **Install Redis**:
-   
-   **Option A: Using Docker (Recommended for development)**
-   ```bash
-   docker run -d -p 6379:6379 --name redis redis:latest
-   ```
-   
-   **Option B: Native Installation**
-   - Windows: Download from https://github.com/microsoftarchive/redis/releases
-   - Linux: `sudo apt-get install redis-server` or `sudo yum install redis`
-   - macOS: `brew install redis`
-   - Then start Redis: `redis-server`
-
-2. **Install Python dependencies**:
+1. **Install Python dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure Redis (Optional)**:
-   
-   The service uses the following environment variables (defaults shown):
-   ```bash
-   REDIS_HOST=localhost      # Redis server host
-   REDIS_PORT=6379           # Redis server port
-   REDIS_DB=0                # Redis database number
-   REDIS_PASSWORD=           # Redis password (optional, leave empty if no password)
-   ```
-   
-   Example with custom configuration:
-   ```bash
-   export REDIS_HOST=localhost
-   export REDIS_PORT=6379
-   export REDIS_PASSWORD=your_password
-   python app.py
-   ```
-
-4. **Run the service**:
+2. **Run the service**:
    ```bash
    python app.py
    ```
@@ -138,9 +108,42 @@ http://your-server-ip:5000/webhook
 }
 ```
 
+## C# Client Example
+
+To get signals from your C# trading bot, use the provided `TradingBotClient.cs` file or the simpler `TradingBotClient_Simple.cs`.
+
+### Quick Example:
+```csharp
+using System.Net.Http;
+using System.Text.Json;
+
+var client = new HttpClient();
+string apiUrl = "http://localhost:5000/signals?limit=10";
+var response = await client.GetAsync(apiUrl);
+var json = await response.Content.ReadAsStringAsync();
+// Parse and process signals...
+```
+
+### Full Example:
+See `TradingBotClient.cs` for a complete implementation with:
+- Signal model classes
+- Async/await pattern
+- Error handling
+- Continuous polling example
+
+**Important**: When you retrieve signals via `GET /signals`, they are **removed from memory** (queue behavior). Each signal is consumed once.
+
 ## Testing
 
-### Test the webhook endpoint:
+### Send Test Signals (Recommended):
+Use the provided test script to populate the service with sample signals:
+```bash
+python test_send_signals.py
+```
+
+This will send 10 sample trading signals to the webhook endpoint, which you can then retrieve using the `/signals` endpoint.
+
+### Test the webhook endpoint manually:
 ```bash
 # Test with a sample signal
 curl -X POST http://localhost:5000/webhook \
@@ -155,40 +158,36 @@ curl -X POST http://localhost:5000/webhook \
 
 ### Test the signals endpoint:
 ```bash
-# Get the 5 most recent signals
+# Get the 5 most recent signals (they will be removed from memory)
 curl http://localhost:5000/signals?limit=5
 ```
 
+**Note**: After retrieving signals, they are removed from memory. Run `test_send_signals.py` again to repopulate if needed.
+
 ## Storage
 
-Signals are stored in Redis using a list data structure. The Redis key used is `signals:list`. Signals are stored as JSON strings in the list, with the most recent signals first.
+Signals are stored in-memory using a thread-safe Python list. The most recent signals are kept at the beginning of the list, and the service automatically maintains a maximum of 1000 signals to prevent excessive memory usage.
 
-### Benefits of Redis Storage
+### Benefits of In-Memory Storage
 
-- **Performance**: Much faster than file I/O, especially under concurrent load
-- **Scalability**: Multiple application instances can share the same Redis instance
-- **Concurrency**: Better handling of concurrent webhook requests
-- **Persistence**: Redis can be configured for persistence (RDB/AOF snapshots)
-- **Flexibility**: Easy to add features like signal expiration, counters, and time-based queries
+- **No External Dependencies**: No need to install or configure Redis, SQLite, or any other service
+- **Simple Deployment**: Works on Render, Heroku, and other platforms without additional services
+- **Fast Performance**: In-memory operations are extremely fast
+- **Thread-Safe**: Uses Python's threading locks to handle concurrent webhook requests safely
+- **Zero Configuration**: Works out of the box with no setup required
 
-### Redis Configuration
+### Important Notes
 
-The service automatically connects to Redis on startup. If Redis is not available, the service will start but will return errors when trying to store or retrieve signals. Check the `/health` endpoint to verify Redis connectivity.
-
-### Migration from JSON File
-
-If you previously used the JSON file storage, you can either:
-- Start fresh with Redis (old `signals.json` file will be ignored)
-- Use the migration script to import existing signals:
-  ```bash
-  python migrate_json_to_redis.py
-  ```
+- **Data Persistence**: Signals are stored in memory and will be lost when the application restarts. This is suitable for real-time trading signals where historical data persistence may not be critical.
+- **Single Instance**: This storage method works best with a single application instance. For multiple instances, consider using Redis or a database.
+- **Memory Usage**: The service automatically limits storage to 1000 signals to prevent excessive memory usage.
 
 ## Notes
 
 - The service keeps the last 1000 signals to prevent excessive memory usage
 - Each signal is automatically timestamped when received
 - The service runs in debug mode by default (change `debug=True` to `debug=False` in production)
-- Redis must be running and accessible for the service to function properly
-- Check the `/health` endpoint to verify Redis connection status
+- Signals are stored in memory and will be lost when the application restarts
+- The storage is thread-safe and handles concurrent webhook requests safely
+- Check the `/health` endpoint to verify service status and signal count
 
