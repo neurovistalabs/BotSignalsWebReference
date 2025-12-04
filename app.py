@@ -54,18 +54,26 @@ def webhook():
         # otherwise it sends text/plain. Handle both cases.
         signal_data = None
         
+        # Log incoming request details for debugging
+        content_type = request.content_type
+        logger.info(f"Webhook received: Content-Type={content_type}, is_json={request.is_json}")
+        
         # Try to get JSON data first
         if request.is_json:
             signal_data = request.get_json()
+            logger.debug(f"Parsed JSON data: {signal_data}")
         else:
             # If not JSON, try to parse the raw text as JSON
             try:
                 raw_data = request.get_data(as_text=True)
+                logger.debug(f"Raw data received: {raw_data[:200]}")  # Log first 200 chars
                 if raw_data:
                     signal_data = json.loads(raw_data)
+                    logger.debug(f"Parsed raw data as JSON: {signal_data}")
             except (json.JSONDecodeError, ValueError):
                 # If it's not JSON, treat it as plain text and create a signal object
                 raw_data = request.get_data(as_text=True)
+                logger.info(f"Received plain text (not JSON): {raw_data[:200]}")
                 if raw_data:
                     signal_data = {
                         'message': raw_data,
@@ -82,7 +90,12 @@ def webhook():
         
         # Save signal to in-memory storage
         save_signal(signal_data)
-        logger.info(f"Signal received and stored: {signal_data.get('action', 'unknown')} {signal_data.get('symbol', 'unknown')}")
+        
+        # Log signal details - show what keys are present and key values
+        action = signal_data.get('action', signal_data.get('Action', 'N/A'))
+        symbol = signal_data.get('symbol', signal_data.get('Symbol', signal_data.get('ticker', 'N/A')))
+        signal_keys = list(signal_data.keys())
+        logger.info(f"Signal received and stored: action={action}, symbol={symbol}, keys={signal_keys}")
         
         # Return quickly (TradingView requires response within 3 seconds)
         return jsonify({
