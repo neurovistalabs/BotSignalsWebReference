@@ -48,54 +48,47 @@ def save_signal(signal_data):
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Receive signal from TradingView webhook"""
+    """Receive signal from TradingView webhook - optimized for fast response"""
     try:
-        # TradingView sends JSON if the alert message is valid JSON,
-        # otherwise it sends text/plain. Handle both cases.
+        # Optimized parsing: try JSON first, then fallback to text
         signal_data = None
         
-        # Log incoming request details for debugging
-        content_type = request.content_type
-        logger.info(f"Webhook received: Content-Type={content_type}, is_json={request.is_json}")
-        
-        # Try to get JSON data first
+        # Fast path: try to get JSON directly
         if request.is_json:
-            signal_data = request.get_json()
-            logger.debug(f"Parsed JSON data: {signal_data}")
-        else:
-            # If not JSON, try to parse the raw text as JSON
-            try:
-                raw_data = request.get_data(as_text=True)
-                logger.debug(f"Raw data received: {raw_data[:200]}")  # Log first 200 chars
-                if raw_data:
+            signal_data = request.get_json(silent=True, force=False)
+        
+        # If no JSON, try parsing raw data
+        if not signal_data:
+            raw_data = request.get_data(as_text=True)
+            if raw_data:
+                try:
                     signal_data = json.loads(raw_data)
-                    logger.debug(f"Parsed raw data as JSON: {signal_data}")
-            except (json.JSONDecodeError, ValueError):
-                # If it's not JSON, treat it as plain text and create a signal object
-                raw_data = request.get_data(as_text=True)
-                logger.info(f"Received plain text (not JSON): {raw_data[:200]}")
-                if raw_data:
-                    signal_data = {
-                        'message': raw_data,
-                        'raw': True
-                    }
+                except (json.JSONDecodeError, ValueError):
+                    # Treat as plain text
+                    signal_data = {'message': raw_data, 'raw': True}
         
         if not signal_data:
-            logger.warning("Webhook received request with no data")
             return jsonify({'error': 'No data received'}), 400
         
-        # Add timestamp to the signal
-        signal_data['timestamp'] = datetime.now().isoformat()
-        signal_data['received_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Ensure signal_data is a dict
+        if not isinstance(signal_data, dict):
+            signal_data = {'data': signal_data}
+        
+        # Add timestamp (single datetime.now() call for efficiency)
+        now = datetime.now()
+        signal_data['timestamp'] = now.isoformat()
+        signal_data['received_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
         
         # Save signal to in-memory storage
-        save_signal(signal_data)
-        
-        # Log signal details - show what keys are present and key values
-        action = signal_data.get('action', signal_data.get('Action', 'N/A'))
-        symbol = signal_data.get('symbol', signal_data.get('Symbol', signal_data.get('ticker', 'N/A')))
-        signal_keys = list(signal_data.keys())
-        logger.info(f"Signal received and stored: action={action}, symbol={symbol}, keys={signal_keys}")
+        try:
+            save_signal(signal_data)
+        except Exception as save_err:
+            logger.error(f"Error saving signal: {save_err}", exc_info=True)
+            return jsonify({
+                'status': 'warning',
+                'message': 'Signal received but storage failed',
+                'error': str(save_err)
+            }), 200
         
         # Return quickly (TradingView requires response within 3 seconds)
         return jsonify({
@@ -105,8 +98,11 @@ def webhook():
         }), 200
         
     except Exception as e:
-        logger.error(f"Error processing webhook: {str(e)}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Unexpected error processing webhook: {str(e)}", exc_info=True)
+        try:
+            return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+        except Exception:
+            return '{"error":"Internal server error"}', 500, {'Content-Type': 'application/json'}
 
 @app.route('/signals', methods=['GET'])
 def get_signals():
@@ -148,5 +144,9 @@ if __name__ == '__main__':
     # In production, Render uses gunicorn (see Procfile)
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    logger.info(f"Starting Flask app on port {port}, debug={debug}")
     app.run(host='0.0.0.0', port=port, debug=debug)
+else:
+    # Log when running under gunicorn
+    logger.info("Flask app initialized (running under gunicorn)")
 
